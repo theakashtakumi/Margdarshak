@@ -2,7 +2,6 @@ import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import fs from 'node:fs';
 
-// Ensure data directory exists
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -40,7 +39,56 @@ export function initDatabase(db: DatabaseSync) {
     );
   `);
 
-  // 2. User Sessions Table
+  // 2. Portals Table (Independent civic portal entity)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS portals (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      official_url TEXT NOT NULL,
+      verified_hostname TEXT NOT NULL,
+      description TEXT NOT NULL,
+      operating_authority TEXT NOT NULL,
+      category TEXT NOT NULL,
+      services_offered TEXT NOT NULL,
+      verification_state TEXT NOT NULL CHECK(verification_state IN ('verified', 'provisional', 'demo')),
+      last_verified_at TEXT NOT NULL
+    );
+  `);
+
+  // 3. Portal Monitoring History (Separate history log)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS portal_monitoring_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      portal_id TEXT NOT NULL,
+      check_timestamp TEXT NOT NULL,
+      monitoring_method TEXT NOT NULL CHECK(monitoring_method IN ('curated_audit', 'automated_probe')),
+      tested_scope TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('reachable', 'degraded', 'issue', 'unknown', 'monitoring_unavailable')),
+      http_status INTEGER,
+      latency_ms INTEGER,
+      diagnostic_notes TEXT NOT NULL,
+      FOREIGN KEY (portal_id) REFERENCES portals(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_monitoring_portal_time ON portal_monitoring_records(portal_id, check_timestamp DESC);
+  `);
+
+  // 4. Opportunity-to-Portal Junction Table (Many-to-Many explicit relationship)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS opportunity_portals (
+      opportunity_id TEXT NOT NULL,
+      portal_id TEXT NOT NULL,
+      relationship_type TEXT NOT NULL CHECK(relationship_type IN ('application_portal', 'information_source', 'registration_portal', 'notice_portal')),
+      official_reference_url TEXT,
+      relationship_notes TEXT,
+      PRIMARY KEY (opportunity_id, portal_id, relationship_type),
+      FOREIGN KEY (opportunity_id) REFERENCES opportunities(id) ON DELETE CASCADE,
+      FOREIGN KEY (portal_id) REFERENCES portals(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_opp_portals_opp ON opportunity_portals(opportunity_id);
+    CREATE INDEX IF NOT EXISTS idx_opp_portals_portal ON opportunity_portals(portal_id);
+  `);
+
+  // 5. User Sessions Table
   db.exec(`
     CREATE TABLE IF NOT EXISTS user_sessions (
       session_token TEXT PRIMARY KEY,
@@ -51,7 +99,7 @@ export function initDatabase(db: DatabaseSync) {
     CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON user_sessions(user_id);
   `);
 
-  // 3. User Saved Opportunities
+  // 6. User Saved Opportunities
   db.exec(`
     CREATE TABLE IF NOT EXISTS user_saved_opportunities (
       user_id TEXT NOT NULL,
@@ -62,7 +110,7 @@ export function initDatabase(db: DatabaseSync) {
     );
   `);
 
-  // 4. User Checklist Progress
+  // 7. User Checklist Progress
   db.exec(`
     CREATE TABLE IF NOT EXISTS user_checklist_progress (
       user_id TEXT NOT NULL,
@@ -75,42 +123,15 @@ export function initDatabase(db: DatabaseSync) {
     );
   `);
 
-  // 5. Portal Audit Records
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS portal_audit_records (
-      portal_id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      official_url TEXT NOT NULL,
-      allowlisted_host TEXT NOT NULL,
-      monitoring_method TEXT NOT NULL CHECK(monitoring_method IN ('curated_audit', 'automated_probe')),
-      tested_scope TEXT NOT NULL,
-      status TEXT NOT NULL CHECK(status IN ('reachable', 'degraded', 'issue', 'unknown', 'monitoring_unavailable')),
-      http_status INTEGER,
-      latency_ms INTEGER,
-      last_checked_at TEXT NOT NULL,
-      disclaimer_notes TEXT NOT NULL
-    );
-  `);
-
-  // Seed opportunities if empty
-  const countStmt = db.prepare('SELECT COUNT(*) as count FROM opportunities');
-  const countRow = countStmt.get() as { count: number };
-
-  if (countRow.count === 0) {
-    seedInitialOpportunities(db);
-  }
-
-  // Seed portal audits if empty
-  const portalCountStmt = db.prepare('SELECT COUNT(*) as count FROM portal_audit_records');
-  const portalCountRow = portalCountStmt.get() as { count: number };
-
-  if (portalCountRow.count === 0) {
-    seedInitialPortals(db);
-  }
+  // Seed opportunities, portals, relationships, and audit history
+  seedOpportunities(db);
+  seedPortals(db);
+  seedOpportunityPortals(db);
+  seedInitialMonitoringHistory(db);
 }
 
-function seedInitialOpportunities(db: DatabaseSync) {
-  const insertStmt = db.prepare(`
+function seedOpportunities(db: DatabaseSync) {
+  const upsertStmt = db.prepare(`
     INSERT INTO opportunities (
       id, title, category, academic_level, issuing_authority, official_url,
       verified_domain, description, eligibility_summary, financial_benefit,
@@ -119,6 +140,22 @@ function seedInitialOpportunities(db: DatabaseSync) {
     ) VALUES (
       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
     )
+    ON CONFLICT(id) DO UPDATE SET
+      title = excluded.title,
+      category = excluded.category,
+      academic_level = excluded.academic_level,
+      issuing_authority = excluded.issuing_authority,
+      official_url = excluded.official_url,
+      verified_domain = excluded.verified_domain,
+      description = excluded.description,
+      eligibility_summary = excluded.eligibility_summary,
+      financial_benefit = excluded.financial_benefit,
+      opening_date = excluded.opening_date,
+      deadline = excluded.deadline,
+      official_source_url = excluded.official_source_url,
+      verification_state = excluded.verification_state,
+      last_verified_at = excluded.last_verified_at,
+      checklist_schema = excluded.checklist_schema
   `);
 
   const records = [
@@ -174,6 +211,57 @@ function seedInitialOpportunities(db: DatabaseSync) {
       ])
     },
     {
+      id: 'opp-aicte-pragati-2026',
+      title: 'AICTE Pragati Scholarship for Girl Students (Technical Degree/Diploma)',
+      category: 'scholarship',
+      academic_level: 'Undergraduate',
+      issuing_authority: 'All India Council for Technical Education (AICTE), Ministry of Education',
+      official_url: 'https://scholarships.gov.in',
+      verified_domain: 'scholarships.gov.in',
+      description: 'Empowers young women to pursue technical education by providing annual tuition and educational expense assistance for degree and diploma programs.',
+      eligibility_summary: 'Girl student admitted to 1st year of degree/diploma program in AICTE approved institution; family income not exceeding ₹8,00,000 p.a.; maximum two girls per family.',
+      financial_benefit: '₹50,000/year for every year of study towards college fee, books, software, and equipment',
+      opening_date: '2026-08-01T00:00:00Z',
+      deadline: '2026-11-15T23:59:59Z',
+      official_source_url: 'https://www.aicte-india.org/schemes/students-development-schemes/Pragati',
+      verification_state: 'verified',
+      last_verified_at: '2026-10-27T10:00:00Z',
+      checklist_schema: JSON.stringify([
+        {
+          id: 'step-pragati-1',
+          title: 'Class 10th and 12th Marksheet',
+          description: 'Verified marksheet from recognized state/central secondary education board.',
+          is_mandatory: true,
+          condition_note: null,
+          official_reference_url: 'https://scholarships.gov.in'
+        },
+        {
+          id: 'step-pragati-2',
+          title: 'Parental Annual Income Certificate (<= ₹8 LPA)',
+          description: 'Issued by competent Tehsildar/Sub-Divisional Magistrate for current financial year.',
+          is_mandatory: true,
+          condition_note: null,
+          official_reference_url: 'https://scholarships.gov.in'
+        },
+        {
+          id: 'step-pragati-3',
+          title: 'AICTE Institution Admission Bonafide Letter & Fee Receipt',
+          description: 'Signed certificate from college registrar confirming 1st-year technical degree/diploma seat.',
+          is_mandatory: true,
+          condition_note: null,
+          official_reference_url: 'https://scholarships.gov.in'
+        },
+        {
+          id: 'step-pragati-4',
+          title: 'Two-Girl Child Family Declaration Affidavit',
+          description: 'Self-declaration by parents certifying girl child quota conditions.',
+          is_mandatory: true,
+          condition_note: null,
+          official_reference_url: 'https://scholarships.gov.in'
+        }
+      ])
+    },
+    {
       id: 'opp-pmrf-2026',
       title: "Prime Minister's Research Fellowship (PMRF)",
       category: 'scholarship',
@@ -221,6 +309,49 @@ function seedInitialOpportunities(db: DatabaseSync) {
           is_mandatory: true,
           condition_note: null,
           official_reference_url: 'https://www.pmrf.in/guidelines'
+        }
+      ])
+    },
+    {
+      id: 'opp-pwd-postmatric-2026',
+      title: 'Post-Matric Scholarship for Students with Disabilities',
+      category: 'scholarship',
+      academic_level: 'Undergraduate',
+      issuing_authority: 'Department of Empowerment of Persons with Disabilities, Ministry of Social Justice',
+      official_url: 'https://scholarships.gov.in',
+      verified_domain: 'scholarships.gov.in',
+      description: 'Supports higher education among students with benchmark disabilities through comprehensive maintenance, book, and disability allowance.',
+      eligibility_summary: 'Disability >= 40% with valid UDID or disability certificate; studying in recognized post-matric course; gross family income <= ₹2,50,000 p.a.',
+      financial_benefit: 'Maintenance allowance up to ₹1,600/month + book grant + disability escort allowance',
+      opening_date: '2026-07-15T00:00:00Z',
+      deadline: '2026-12-10T23:59:59Z',
+      official_source_url: 'https://disabilityaffairs.gov.in/content/page/post-matric-scholarship.php',
+      verification_state: 'verified',
+      last_verified_at: '2026-10-26T12:00:00Z',
+      checklist_schema: JSON.stringify([
+        {
+          id: 'step-pwd-1',
+          title: 'UDID Card / Government Medical Disability Certificate',
+          description: 'Verification of 40% or more benchmark disability issued by authorized medical board.',
+          is_mandatory: true,
+          condition_note: null,
+          official_reference_url: 'https://scholarships.gov.in'
+        },
+        {
+          id: 'step-pwd-2',
+          title: 'Parental Annual Income Certificate (<= ₹2.5 LPA)',
+          description: 'Income certificate issued by revenue authority.',
+          is_mandatory: true,
+          condition_note: null,
+          official_reference_url: 'https://scholarships.gov.in'
+        },
+        {
+          id: 'step-pwd-3',
+          title: 'Post-Matric Course Admission Receipt',
+          description: 'Admission fee receipt and verified college bonafide certificate.',
+          is_mandatory: true,
+          condition_note: null,
+          official_reference_url: 'https://scholarships.gov.in'
         }
       ])
     },
@@ -319,6 +450,49 @@ function seedInitialOpportunities(db: DatabaseSync) {
       ])
     },
     {
+      id: 'opp-neet-ug-2027',
+      title: 'NEET (UG) National Eligibility cum Entrance Test',
+      category: 'examination',
+      academic_level: '10+2 / Secondary',
+      issuing_authority: 'National Testing Agency (NTA)',
+      official_url: 'https://exams.nta.ac.in',
+      verified_domain: 'nta.ac.in',
+      description: 'Single national entrance examination for admission to undergraduate medical (MBBS), dental (BDS), and AYUSH courses in all recognized medical institutions in India.',
+      eligibility_summary: 'Passed or appearing in 10+2 with Physics, Chemistry, Biology/Biotechnology, and English; minimum 17 years of age.',
+      financial_benefit: 'Eligibility for admission to state and central subsidized government medical colleges',
+      opening_date: '2027-01-10T00:00:00Z',
+      deadline: '2027-03-09T23:50:00Z',
+      official_source_url: 'https://exams.nta.ac.in/NEET/',
+      verification_state: 'provisional',
+      last_verified_at: '2026-10-28T09:00:00Z',
+      checklist_schema: JSON.stringify([
+        {
+          id: 'step-neet-1',
+          title: 'Class 10th & 12th Board Certificates',
+          description: 'Passed or admit card details for 10+2 examination.',
+          is_mandatory: true,
+          condition_note: null,
+          official_reference_url: 'https://exams.nta.ac.in'
+        },
+        {
+          id: 'step-neet-2',
+          title: 'Scanned Passport and Postcard Photo (White Background)',
+          description: 'Recent clear photograph with candidate name and date of photo imprinted.',
+          is_mandatory: true,
+          condition_note: null,
+          official_reference_url: 'https://exams.nta.ac.in'
+        },
+        {
+          id: 'step-neet-3',
+          title: 'Left and Right Hands Fingers and Thumb Impressions',
+          description: 'Clear ink impression scanned conforming to NTA specifications.',
+          is_mandatory: true,
+          condition_note: null,
+          official_reference_url: 'https://exams.nta.ac.in'
+        }
+      ])
+    },
+    {
       id: 'opp-demo-state-fellowship',
       title: 'State Public Policy Leadership Fellowship (Demonstration Fixture)',
       category: 'scholarship',
@@ -329,8 +503,8 @@ function seedInitialOpportunities(db: DatabaseSync) {
       description: 'Demonstration fixture designed for automated data-quality testing of unannounced application deadlines, optional document handling, and expired cycles.',
       eligibility_summary: 'Demonstration criteria: Graduates with public policy focus; demonstration data for UI resilience testing.',
       financial_benefit: '₹35,000/month demonstration stipend',
-      opening_date: null, // Test nullable dates
-      deadline: null,     // Test unannounced deadline
+      opening_date: null,
+      deadline: null,
       official_source_url: 'https://scholarships.gov.in/public/demoGuidelines.pdf',
       verification_state: 'demo',
       last_verified_at: '2026-10-20T00:00:00Z',
@@ -356,7 +530,7 @@ function seedInitialOpportunities(db: DatabaseSync) {
   ];
 
   for (const r of records) {
-    insertStmt.run(
+    upsertStmt.run(
       r.id, r.title, r.category, r.academic_level, r.issuing_authority,
       r.official_url, r.verified_domain, r.description, r.eligibility_summary,
       r.financial_benefit, r.opening_date, r.deadline, r.official_source_url,
@@ -365,78 +539,376 @@ function seedInitialOpportunities(db: DatabaseSync) {
   }
 }
 
-function seedInitialPortals(db: DatabaseSync) {
-  const insertStmt = db.prepare(`
-    INSERT INTO portal_audit_records (
-      portal_id, name, official_url, allowlisted_host, monitoring_method,
-      tested_scope, status, http_status, latency_ms, last_checked_at, disclaimer_notes
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+function seedPortals(db: DatabaseSync) {
+  const upsertStmt = db.prepare(`
+    INSERT INTO portals (
+      id, name, official_url, verified_hostname, description,
+      operating_authority, category, services_offered, verification_state, last_verified_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      name = excluded.name,
+      official_url = excluded.official_url,
+      verified_hostname = excluded.verified_hostname,
+      description = excluded.description,
+      operating_authority = excluded.operating_authority,
+      category = excluded.category,
+      services_offered = excluded.services_offered,
+      verification_state = excluded.verification_state,
+      last_verified_at = excluded.last_verified_at
   `);
 
   const portals = [
     {
-      portal_id: 'portal-nsp',
+      id: 'portal-nsp',
       name: 'National Scholarship Portal (NSP)',
       official_url: 'https://scholarships.gov.in',
-      allowlisted_host: 'scholarships.gov.in',
-      monitoring_method: 'curated_audit',
-      tested_scope: 'homepage_tls_head_only',
-      status: 'reachable',
-      http_status: 200,
-      latency_ms: 184,
-      last_checked_at: '2026-10-29T08:15:00Z',
-      disclaimer_notes: 'Automated check verifies root DNS and TLS handshake only. Internal transactional steps (Aadhaar OTP, student login, file upload) are not verified.'
+      verified_hostname: 'scholarships.gov.in',
+      description: 'Apex central portal for pan-India Government scholarship applications, student verification, institute KYC, and direct DBT fund transfers.',
+      operating_authority: 'National Informatics Centre (NIC) & Ministry of Electronics and Information Technology',
+      category: 'scholarship_gateway',
+      services_offered: JSON.stringify([
+        'Student Universal Registration & Profile',
+        'Multi-Ministry Scholarship Applications',
+        'Institute Bonafide Verification',
+        'National Automated Clearing House (NACH) DBT Tracking'
+      ]),
+      verification_state: 'verified',
+      last_verified_at: '2026-10-29T08:15:00Z'
     },
     {
-      portal_id: 'portal-upsc',
-      name: 'UPSC Online Application Portal',
+      id: 'portal-upsc-online',
+      name: 'UPSC Online Examination Portal',
       official_url: 'https://upsconline.nic.in',
-      allowlisted_host: 'upsconline.nic.in',
-      monitoring_method: 'curated_audit',
-      tested_scope: 'homepage_tls_head_only',
-      status: 'reachable',
-      http_status: 200,
-      latency_ms: 220,
-      last_checked_at: '2026-10-29T08:20:00Z',
-      disclaimer_notes: 'Server responding nominally. One-Time Registration (OTR) server status and photo cropping service reachability not verified in automated scope.'
+      verified_hostname: 'upsconline.nic.in',
+      description: 'Official application engine for national civil, defense, and engineering recruitment examinations administered by UPSC.',
+      operating_authority: 'Union Public Service Commission (UPSC)',
+      category: 'examination_portal',
+      services_offered: JSON.stringify([
+        'One-Time Registration (OTR) Lifecycle',
+        'Civil Services Preliminary & Mains Application',
+        'Admit Card Download & Centre Allotment',
+        'e-Challan & Online Fee Payment Gateway'
+      ]),
+      verification_state: 'verified',
+      last_verified_at: '2026-10-29T08:20:00Z'
     },
     {
-      portal_id: 'portal-nta',
-      name: 'National Testing Agency (NTA Exam Portal)',
+      id: 'portal-upsc-gov',
+      name: 'Union Public Service Commission Gazette & Notices',
+      official_url: 'https://upsc.gov.in',
+      verified_hostname: 'upsc.gov.in',
+      description: 'Authoritative departmental repository for active examination notifications, syllabi, previous question papers, and final recruitment press releases.',
+      operating_authority: 'Union Public Service Commission (UPSC)',
+      category: 'civic_records',
+      services_offered: JSON.stringify([
+        'Annual Examination Calendar Gazette',
+        'Detailed Syllabus & Examination Scheme Rules',
+        'Answer Keys & Cut-Off Marks Disclosure',
+        'Recruitment Interview Schedule Notices'
+      ]),
+      verification_state: 'verified',
+      last_verified_at: '2026-10-29T08:20:00Z'
+    },
+    {
+      id: 'portal-nta',
+      name: 'National Testing Agency (NTA)',
       official_url: 'https://nta.ac.in',
-      allowlisted_host: 'nta.ac.in',
-      monitoring_method: 'curated_audit',
-      tested_scope: 'homepage_tls_head_only',
-      status: 'reachable',
-      http_status: 200,
-      latency_ms: 310,
-      last_checked_at: '2026-10-29T08:05:00Z',
-      disclaimer_notes: 'Gateway responsive. Admit card generation and payment gateway callbacks are third-party services and not audited here.'
+      verified_hostname: 'nta.ac.in',
+      description: 'Specialized testing organization conducting premier entrance assessments (UGC-NET, NEET-UG, JEE Main, CMAT) across India.',
+      operating_authority: 'Department of Higher Education, Ministry of Education',
+      category: 'examination_portal',
+      services_offered: JSON.stringify([
+        'Centralized Examination Information Bulletins',
+        'Public Circulars & Calendar Updates',
+        'Mock Test Practice Interface',
+        'Score Card Score Normalization Reports'
+      ]),
+      verification_state: 'verified',
+      last_verified_at: '2026-10-29T08:05:00Z'
     },
     {
-      portal_id: 'portal-pmrf',
+      id: 'portal-ugcnet',
+      name: 'UGC-NET Examination Portal',
+      official_url: 'https://ugcnet.nta.ac.in',
+      verified_hostname: 'ugcnet.nta.ac.in',
+      description: 'Dedicated applicant transaction portal for UGC National Eligibility Test registration, application form submission, and city intimation slips.',
+      operating_authority: 'National Testing Agency (NTA)',
+      category: 'examination_portal',
+      services_offered: JSON.stringify([
+        'Online Examination Registration & Fee Payment',
+        'Correction Window Form Editing',
+        'Advance City Intimation Slip Download',
+        'Final Scorecard & JRF Award Letter Generation'
+      ]),
+      verification_state: 'verified',
+      last_verified_at: '2026-10-29T08:05:00Z'
+    },
+    {
+      id: 'portal-pmrf',
       name: 'PMRF National Coordination Portal',
       official_url: 'https://www.pmrf.in',
-      allowlisted_host: 'pmrf.in',
-      monitoring_method: 'curated_audit',
-      tested_scope: 'homepage_tls_head_only',
-      status: 'reachable',
-      http_status: 200,
-      latency_ms: 145,
-      last_checked_at: '2026-10-29T07:45:00Z',
-      disclaimer_notes: 'Homepage content verified. Nomination nodal center review portals are restricted internal intranets.'
+      verified_hostname: 'www.pmrf.in',
+      description: 'Central administrative gateway for Prime Minister’s Research Fellowship candidate nomination review, guidelines, and nodal coordinator access.',
+      operating_authority: 'National Coordination Committee (IITs & IISc)',
+      category: 'education_portal',
+      services_offered: JSON.stringify([
+        'Doctoral Fellowship Guidelines & Rulebook',
+        'Participating IISc/IIT Nodal Center Directory',
+        'Research Progress Review Schedules'
+      ]),
+      verification_state: 'verified',
+      last_verified_at: '2026-10-29T07:45:00Z'
+    },
+    {
+      id: 'portal-digilocker',
+      name: 'DigiLocker National Academic Depository',
+      official_url: 'https://digilocker.gov.in',
+      verified_hostname: 'digilocker.gov.in',
+      description: 'Digital India flagship platform providing paperless access to verified digital marksheet certificates and academic identity documents.',
+      operating_authority: 'Ministry of Electronics and Information Technology (MeitY)',
+      category: 'civic_records',
+      services_offered: JSON.stringify([
+        'Aadhaar e-KYC Verification',
+        'Class 10 & 12 Digital Marksheet Issuance',
+        'Caste & Income Certificate Integration'
+      ]),
+      verification_state: 'verified',
+      last_verified_at: '2026-10-28T12:00:00Z'
     }
   ];
 
   for (const p of portals) {
-    insertStmt.run(
-      p.portal_id, p.name, p.official_url, p.allowlisted_host,
-      p.monitoring_method, p.tested_scope, p.status, p.http_status,
-      p.latency_ms, p.last_checked_at, p.disclaimer_notes
+    upsertStmt.run(
+      p.id, p.name, p.official_url, p.verified_hostname, p.description,
+      p.operating_authority, p.category, p.services_offered, p.verification_state, p.last_verified_at
     );
   }
 }
 
-// Default singleton instance
+function seedOpportunityPortals(db: DatabaseSync) {
+  const upsertStmt = db.prepare(`
+    INSERT INTO opportunity_portals (
+      opportunity_id, portal_id, relationship_type, official_reference_url, relationship_notes
+    ) VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(opportunity_id, portal_id, relationship_type) DO UPDATE SET
+      official_reference_url = excluded.official_reference_url,
+      relationship_notes = excluded.relationship_notes
+  `);
+
+  // Explicit many-to-many mappings
+  const relationships = [
+    // CSSS linked to NSP (application) and DigiLocker (registration/verification)
+    {
+      opportunity_id: 'opp-csss-2026',
+      portal_id: 'portal-nsp',
+      relationship_type: 'application_portal',
+      official_reference_url: 'https://scholarships.gov.in',
+      relationship_notes: 'Primary digital application gateway for student registration and DBT verification.'
+    },
+    {
+      opportunity_id: 'opp-csss-2026',
+      portal_id: 'portal-digilocker',
+      relationship_type: 'registration_portal',
+      official_reference_url: 'https://digilocker.gov.in',
+      relationship_notes: 'Provides verified digital Class 12 marksheet fetching directly into the NSP application.'
+    },
+
+    // Pragati linked to NSP (One portal serving multiple opportunities)
+    {
+      opportunity_id: 'opp-aicte-pragati-2026',
+      portal_id: 'portal-nsp',
+      relationship_type: 'application_portal',
+      official_reference_url: 'https://scholarships.gov.in',
+      relationship_notes: 'Submitted under the AICTE Schemes tab on the National Scholarship Portal.'
+    },
+
+    // PwD Post-Matric linked to NSP
+    {
+      opportunity_id: 'opp-pwd-postmatric-2026',
+      portal_id: 'portal-nsp',
+      relationship_type: 'application_portal',
+      official_reference_url: 'https://scholarships.gov.in',
+      relationship_notes: 'Online application submitted under Department of Empowerment of Persons with Disabilities.'
+    },
+
+    // Demo state fellowship linked to NSP
+    {
+      opportunity_id: 'opp-demo-state-fellowship',
+      portal_id: 'portal-nsp',
+      relationship_type: 'information_source',
+      official_reference_url: 'https://scholarships.gov.in',
+      relationship_notes: 'Demonstration reference linkage.'
+    },
+
+    // UPSC CSE linked to upsconline.nic.in (application & OTR) AND upsc.gov.in (notices & gazette)
+    {
+      opportunity_id: 'opp-upsc-cse-2027',
+      portal_id: 'portal-upsc-online',
+      relationship_type: 'application_portal',
+      official_reference_url: 'https://upsconline.nic.in',
+      relationship_notes: 'Portal for One Time Registration (OTR) and online application submission.'
+    },
+    {
+      opportunity_id: 'opp-upsc-cse-2027',
+      portal_id: 'portal-upsc-online',
+      relationship_type: 'registration_portal',
+      official_reference_url: 'https://upsconline.nic.in/upsc/OTRP/',
+      relationship_notes: 'Required One-Time Registration before applying for CSE.'
+    },
+    {
+      opportunity_id: 'opp-upsc-cse-2027',
+      portal_id: 'portal-upsc-gov',
+      relationship_type: 'notice_portal',
+      official_reference_url: 'https://upsc.gov.in/examinations/active-exams',
+      relationship_notes: 'Official gazette notification, exam rules, and syllabus bulletins published here.'
+    },
+
+    // UGC-NET linked to ugcnet.nta.ac.in (application) and nta.ac.in (notices)
+    {
+      opportunity_id: 'opp-ugc-net-2026',
+      portal_id: 'portal-ugcnet',
+      relationship_type: 'application_portal',
+      official_reference_url: 'https://ugcnet.nta.ac.in',
+      relationship_notes: 'Candidate portal for candidate login, application submission, and admit card download.'
+    },
+    {
+      opportunity_id: 'opp-ugc-net-2026',
+      portal_id: 'portal-nta',
+      relationship_type: 'information_source',
+      official_reference_url: 'https://nta.ac.in',
+      relationship_notes: 'Apex examination body portal publishing examination calendar circulars.'
+    },
+
+    // NEET-UG linked to NTA
+    {
+      opportunity_id: 'opp-neet-ug-2027',
+      portal_id: 'portal-nta',
+      relationship_type: 'information_source',
+      official_reference_url: 'https://nta.ac.in',
+      relationship_notes: 'NTA circular announcements and eligibility clarification notices.'
+    },
+
+    // PMRF linked to pmrf.in
+    {
+      opportunity_id: 'opp-pmrf-2026',
+      portal_id: 'portal-pmrf',
+      relationship_type: 'application_portal',
+      official_reference_url: 'https://www.pmrf.in',
+      relationship_notes: 'Official doctoral fellowship application and nomination guidelines.'
+    }
+  ];
+
+  for (const rel of relationships) {
+    upsertStmt.run(
+      rel.opportunity_id,
+      rel.portal_id,
+      rel.relationship_type,
+      rel.official_reference_url,
+      rel.relationship_notes
+    );
+  }
+}
+
+function seedInitialMonitoringHistory(db: DatabaseSync) {
+  const countStmt = db.prepare('SELECT COUNT(*) as count FROM portal_monitoring_records');
+  const countRow = countStmt.get() as { count: number };
+
+  if (countRow.count === 0) {
+    const insertStmt = db.prepare(`
+      INSERT INTO portal_monitoring_records (
+        portal_id, check_timestamp, monitoring_method, tested_scope,
+        status, http_status, latency_ms, diagnostic_notes
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    const initialHistory = [
+      {
+        portal_id: 'portal-nsp',
+        check_timestamp: '2026-10-29T08:15:00Z',
+        monitoring_method: 'curated_audit',
+        tested_scope: 'homepage_tls_head_only',
+        status: 'reachable',
+        http_status: 200,
+        latency_ms: 184,
+        diagnostic_notes: 'Root TLS handshake nominal. Transactional services (Aadhaar OTP, student login, file upload) not verified in automated scope.'
+      },
+      {
+        portal_id: 'portal-nsp',
+        check_timestamp: '2026-10-29T04:00:00Z',
+        monitoring_method: 'automated_probe',
+        tested_scope: 'homepage_tls_head_only',
+        status: 'reachable',
+        http_status: 200,
+        latency_ms: 195,
+        diagnostic_notes: 'Scheduled probe successful.'
+      },
+      {
+        portal_id: 'portal-upsc-online',
+        check_timestamp: '2026-10-29T08:20:00Z',
+        monitoring_method: 'curated_audit',
+        tested_scope: 'homepage_tls_head_only',
+        status: 'reachable',
+        http_status: 200,
+        latency_ms: 220,
+        diagnostic_notes: 'Server responding nominally. One-Time Registration (OTR) server status not verified in automated scope.'
+      },
+      {
+        portal_id: 'portal-upsc-gov',
+        check_timestamp: '2026-10-29T08:20:00Z',
+        monitoring_method: 'curated_audit',
+        tested_scope: 'homepage_tls_head_only',
+        status: 'reachable',
+        http_status: 200,
+        latency_ms: 178,
+        diagnostic_notes: 'Gazette portal root response nominal.'
+      },
+      {
+        portal_id: 'portal-nta',
+        check_timestamp: '2026-10-29T08:05:00Z',
+        monitoring_method: 'curated_audit',
+        tested_scope: 'homepage_tls_head_only',
+        status: 'reachable',
+        http_status: 200,
+        latency_ms: 310,
+        diagnostic_notes: 'Gateway responsive. Third-party payment gateways and admit card distribution CDN are not audited here.'
+      },
+      {
+        portal_id: 'portal-ugcnet',
+        check_timestamp: '2026-10-29T08:05:00Z',
+        monitoring_method: 'curated_audit',
+        tested_scope: 'homepage_tls_head_only',
+        status: 'reachable',
+        http_status: 200,
+        latency_ms: 245,
+        diagnostic_notes: 'Application engine responding with valid TLS certificate.'
+      },
+      {
+        portal_id: 'portal-pmrf',
+        check_timestamp: '2026-10-29T07:45:00Z',
+        monitoring_method: 'curated_audit',
+        tested_scope: 'homepage_tls_head_only',
+        status: 'reachable',
+        http_status: 200,
+        latency_ms: 145,
+        diagnostic_notes: 'Homepage content verified. Internal nodal center review portals are restricted intranets.'
+      }
+      // Note: portal-digilocker intentionally has NO monitoring history records seeded yet (Unknown monitoring state)
+    ];
+
+    for (const h of initialHistory) {
+      insertStmt.run(
+        h.portal_id,
+        h.check_timestamp,
+        h.monitoring_method,
+        h.tested_scope,
+        h.status,
+        h.http_status,
+        h.latency_ms,
+        h.diagnostic_notes
+      );
+    }
+  }
+}
+
 export const db = getDatabase();
 initDatabase(db);

@@ -60,6 +60,7 @@ export const ChecklistView: React.FC<ChecklistViewProps> = ({
           const userSteps = checklistProgress[opp.id] || {};
           const steps = opp.checklist_schema;
           const completedCount = steps.filter((s) => userSteps[s.id] === 'completed').length;
+          const inProgressCount = steps.filter((s) => userSteps[s.id] === 'in_progress').length;
           const totalCount = steps.length;
           const percent = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
 
@@ -86,7 +87,12 @@ export const ChecklistView: React.FC<ChecklistViewProps> = ({
                   <div className="text-right">
                     <div className="text-xs font-medium text-[#64748B]">Document Readiness</div>
                     <div className="text-sm font-bold text-[#1F2937] tabular-nums">
-                      {completedCount} / {totalCount} Steps ({percent}%)
+                      {completedCount} / {totalCount} Ready ({percent}%)
+                      {inProgressCount > 0 && (
+                        <span className="text-xs font-normal text-[#B45309] ml-1.5">
+                          · {inProgressCount} in progress
+                        </span>
+                      )}
                     </div>
                   </div>
 
@@ -117,67 +123,115 @@ export const ChecklistView: React.FC<ChecklistViewProps> = ({
                 {steps.map((step, idx) => {
                   const status = userSteps[step.id] || 'pending';
                   const isCompleted = status === 'completed';
+                  const isInProgress = status === 'in_progress';
 
                   return (
                     <div
                       key={step.id}
-                      onClick={() =>
-                        onUpdateStep(opp.id, step.id, isCompleted ? 'pending' : 'completed')
-                      }
-                      className={`cursor-pointer p-4 rounded-xl border transition-all flex items-start gap-4 ${
+                      className={`p-4 rounded-xl border transition-all flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 ${
                         isCompleted
                           ? 'bg-[#E6F7F5]/30 border-[#80F3DD]'
-                          : 'bg-white border-[#E2E8F0] hover:border-[#CBD5E1]'
+                          : isInProgress
+                          ? 'bg-[#FEF3C7]/20 border-[#FDE68A]'
+                          : 'bg-white border-[#E2E8F0]'
                       }`}
                     >
-                      {/* Checkbox with high hit target */}
-                      <div className="pt-0.5 shrink-0">
-                        <div
-                          className={`w-6 h-6 rounded-md border flex items-center justify-center transition-colors ${
-                            isCompleted
-                              ? 'bg-[#243B6B] border-[#243B6B] text-white shadow-xs'
-                              : 'border-[#94A3B8] bg-white hover:border-[#243B6B]'
-                          }`}
+                      <div className="flex items-start gap-4 flex-1 min-w-0">
+                        {/* Checkbox */}
+                        <button
+                          type="button"
+                          onClick={() => onUpdateStep(opp.id, step.id, isCompleted ? 'pending' : 'completed')}
+                          className="pt-0.5 shrink-0 focus:outline-none"
+                          title={isCompleted ? 'Mark as pending' : 'Mark as ready'}
                         >
-                          {isCompleted ? (
-                            <CheckCircle2 className="w-4 h-4 text-white" />
-                          ) : (
-                            <span className="text-[10px] font-bold text-[#94A3B8]">{idx + 1}</span>
+                          <div
+                            className={`w-6 h-6 rounded-md border flex items-center justify-center transition-colors ${
+                              isCompleted
+                                ? 'bg-[#243B6B] border-[#243B6B] text-white shadow-xs'
+                                : isInProgress
+                                ? 'border-[#D97706] bg-[#FEF3C7]'
+                                : 'border-[#94A3B8] bg-white hover:border-[#243B6B]'
+                            }`}
+                          >
+                            {isCompleted ? (
+                              <CheckCircle2 className="w-4 h-4 text-white" />
+                            ) : isInProgress ? (
+                              <Clock className="w-3.5 h-3.5 text-[#D97706]" />
+                            ) : (
+                              <span className="text-[10px] font-bold text-[#94A3B8]">{idx + 1}</span>
+                            )}
+                          </div>
+                        </button>
+
+                        {/* Step Details */}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex flex-wrap items-center gap-2 mb-1">
+                            <span
+                              className={`text-sm font-semibold ${
+                                isCompleted ? 'text-[#1F2937] line-through opacity-75' : 'text-[#1F2937]'
+                              }`}
+                            >
+                              {step.title}
+                            </span>
+
+                            {step.is_mandatory ? (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-[#FEE2E2] text-[#B91C1C]">
+                                Mandatory
+                              </span>
+                            ) : (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-[#FEF3C7] text-[#B45309]">
+                                Conditional
+                              </span>
+                            )}
+                          </div>
+
+                          <p className="text-xs text-[#64748B] leading-relaxed">
+                            {step.description}
+                          </p>
+
+                          {step.condition_note && (
+                            <div className="mt-1.5 text-xs text-[#B45309] bg-[#FEF3C7]/60 px-2 py-0.5 rounded inline-block">
+                              Condition: {step.condition_note}
+                            </div>
                           )}
                         </div>
                       </div>
 
-                      {/* Details */}
-                      <div className="flex-1 min-w-0">
-                        <div className="flex flex-wrap items-center gap-2 mb-1">
-                          <span
-                            className={`text-sm font-semibold ${
-                              isCompleted ? 'text-[#1F2937] line-through opacity-75' : 'text-[#1F2937]'
-                            }`}
-                          >
-                            {step.title}
-                          </span>
-
-                          {step.is_mandatory ? (
-                            <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-[#FEE2E2] text-[#B91C1C]">
-                              Mandatory
-                            </span>
-                          ) : (
-                            <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-[#FEF3C7] text-[#B45309]">
-                              Conditional Requirement
-                            </span>
-                          )}
-                        </div>
-
-                        <p className="text-xs text-[#64748B] leading-relaxed">
-                          {step.description}
-                        </p>
-
-                        {step.condition_note && (
-                          <div className="mt-2 text-xs text-[#B45309] bg-[#FEF3C7]/60 px-2.5 py-1 rounded inline-block">
-                            Condition: {step.condition_note}
-                          </div>
-                        )}
+                      {/* Explicit Status State Selector */}
+                      <div className="shrink-0 flex items-center gap-1.5 p-1 bg-[#F1F5F9] rounded-lg text-xs font-medium self-end sm:self-center">
+                        <button
+                          type="button"
+                          onClick={() => onUpdateStep(opp.id, step.id, 'pending')}
+                          className={`px-2 py-1 rounded transition-colors ${
+                            status === 'pending'
+                              ? 'bg-white text-[#1F2937] font-semibold shadow-xs'
+                              : 'text-[#64748B] hover:text-[#1F2937]'
+                          }`}
+                        >
+                          Pending
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onUpdateStep(opp.id, step.id, 'in_progress')}
+                          className={`px-2 py-1 rounded transition-colors ${
+                            status === 'in_progress'
+                              ? 'bg-white text-[#B45309] font-semibold shadow-xs'
+                              : 'text-[#64748B] hover:text-[#1F2937]'
+                          }`}
+                        >
+                          In Progress
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onUpdateStep(opp.id, step.id, 'completed')}
+                          className={`px-2 py-1 rounded transition-colors ${
+                            status === 'completed'
+                              ? 'bg-white text-[#15803D] font-semibold shadow-xs'
+                              : 'text-[#64748B] hover:text-[#1F2937]'
+                          }`}
+                        >
+                          Ready
+                        </button>
                       </div>
                     </div>
                   );
@@ -186,12 +240,12 @@ export const ChecklistView: React.FC<ChecklistViewProps> = ({
 
               {/* Card Footer */}
               <div className="px-6 py-3 bg-[#F8F9FF] border-t border-[#E2E8F0] flex items-center justify-between text-xs text-[#64748B]">
-                <span>Step changes save automatically to your private student session.</span>
+                <span>Status changes persist securely to your student profile across sessions.</span>
                 <button
                   onClick={() => onSelectOpportunity(opp)}
                   className="font-semibold text-[#243B6B] hover:text-[#0F9D8A] transition-colors"
                 >
-                  View Scheme Details →
+                  View Scheme Guidelines →
                 </button>
               </div>
             </div>

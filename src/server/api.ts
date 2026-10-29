@@ -5,7 +5,6 @@ import { generateOpportunityIcs } from './calendar.ts';
 
 export const apiRouter = Router();
 
-// Extend Request with authenticated session
 export interface AuthenticatedRequest extends Request {
   userSession?: {
     session_token: string;
@@ -13,7 +12,6 @@ export interface AuthenticatedRequest extends Request {
   };
 }
 
-// Session authentication middleware
 export function authMiddleware(req: AuthenticatedRequest, res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization;
   const tokenFromHeader = authHeader && authHeader.startsWith('Bearer ') ? authHeader.substring(7) : null;
@@ -31,11 +29,9 @@ export function authMiddleware(req: AuthenticatedRequest, res: Response, next: N
     }
   }
 
-  // Not authenticated
   return next();
 }
 
-// Require authenticated session guard
 export function requireAuth(req: AuthenticatedRequest, res: Response, next: NextFunction) {
   if (!req.userSession) {
     return res.status(401).json({
@@ -51,7 +47,8 @@ export function requireAuth(req: AuthenticatedRequest, res: Response, next: Next
 // --- Auth Endpoints ---
 
 apiRouter.post('/auth/session', (req: Request, res: Response) => {
-  const session = userRepo.createSession();
+  const { userId } = req.body || {};
+  const session = userRepo.createSession(typeof userId === 'string' && userId.trim() ? userId.trim() : undefined);
   res.cookie('margdarshak_session', session.session_token, {
     httpOnly: true,
     sameSite: 'lax',
@@ -88,13 +85,14 @@ apiRouter.get('/auth/me', (req: AuthenticatedRequest, res: Response) => {
 // --- Opportunity Endpoints ---
 
 apiRouter.get('/opportunities', (req: Request, res: Response) => {
-  const { search, category, academic_level, status } = req.query as Record<string, string>;
+  const { search, category, academic_level, status, sort } = req.query as Record<string, string>;
 
   const rows = opportunityRepo.list({
     search,
     category,
     academic_level,
-    status
+    status,
+    sort
   });
 
   const parsed = rows.map((r) => ({
@@ -121,11 +119,44 @@ apiRouter.get('/opportunities/:id', (req: Request, res: Response) => {
     });
   }
 
+  const linkedPortals = opportunityRepo.getPortalsForOpportunity(opp.id).map((r) => ({
+    ...r,
+    portal: {
+      ...r.portal,
+      services_offered: JSON.parse(r.portal.services_offered)
+    }
+  }));
+
   res.json({
     data: {
       ...opp,
-      checklist_schema: JSON.parse(opp.checklist_schema)
+      checklist_schema: JSON.parse(opp.checklist_schema),
+      linked_portals: linkedPortals
     }
+  });
+});
+
+apiRouter.get('/opportunities/:id/portals', (req: Request, res: Response) => {
+  const opp = opportunityRepo.findById(req.params.id);
+  if (!opp) {
+    return res.status(404).json({
+      error: {
+        code: 'NOT_FOUND',
+        message: `Opportunity with identifier "${req.params.id}" was not found.`
+      }
+    });
+  }
+
+  const linkedPortals = opportunityRepo.getPortalsForOpportunity(opp.id).map((r) => ({
+    ...r,
+    portal: {
+      ...r.portal,
+      services_offered: JSON.parse(r.portal.services_offered)
+    }
+  }));
+
+  res.json({
+    data: linkedPortals
   });
 });
 
@@ -253,28 +284,96 @@ apiRouter.put('/user/checklist', requireAuth, (req: AuthenticatedRequest, res: R
 
   userRepo.updateChecklistStep(userId, opportunityId, stepId, status);
   const updatedProgress = userRepo.getChecklistProgress(userId);
+  const updatedSaved = userRepo.getSavedOpportunities(userId);
 
   res.json({
     data: {
       opportunityId,
       stepId,
       status,
-      allProgress: updatedProgress
+      allProgress: updatedProgress,
+      saved_ids: updatedSaved
     }
   });
 });
 
-// --- Portal Monitoring Endpoints ---
+// --- Portal Directory & Monitoring Endpoints ---
 
-apiRouter.get('/portals', (_req: Request, res: Response) => {
-  const portals = portalRepo.list();
+apiRouter.get('/portals', (req: Request, res: Response) => {
+  const { search, category } = req.query as { search?: string; category?: string };
+  const portals = portalRepo.list({ search, category });
+  const parsed = portals.map((p) => ({
+    ...p,
+    services_offered: JSON.parse(p.services_offered)
+  }));
+
   res.json({
-    data: portals
+    data: parsed,
+    meta: {
+      total: parsed.length
+    }
+  });
+});
+
+apiRouter.get('/portals/:id', (req: Request, res: Response) => {
+  const portal = portalRepo.findById(req.params.id);
+  if (!portal) {
+    return res.status(404).json({
+      error: {
+        code: 'NOT_FOUND',
+        message: `Portal record "${req.params.id}" does not exist.`
+      }
+    });
+  }
+
+  const relatedOpportunities = portalRepo.getOpportunitiesForPortal(req.params.id);
+
+  res.json({
+    data: {
+      ...portal,
+      services_offered: JSON.parse(portal.services_offered),
+      related_opportunities: relatedOpportunities
+    }
+  });
+});
+
+apiRouter.get('/portals/:id/history', (req: Request, res: Response) => {
+  const portal = portalRepo.findById(req.params.id);
+  if (!portal) {
+    return res.status(404).json({
+      error: {
+        code: 'NOT_FOUND',
+        message: `Portal record "${req.params.id}" does not exist.`
+      }
+    });
+  }
+
+  const history = portalRepo.getMonitoringHistory(req.params.id, 25);
+  res.json({
+    data: history
+  });
+});
+
+apiRouter.get('/portals/:id/opportunities', (req: Request, res: Response) => {
+  const portal = portalRepo.findById(req.params.id);
+  if (!portal) {
+    return res.status(404).json({
+      error: {
+        code: 'NOT_FOUND',
+        message: `Portal record "${req.params.id}" does not exist.`
+      }
+    });
+  }
+
+  const opportunities = portalRepo.getOpportunitiesForPortal(req.params.id);
+  res.json({
+    data: opportunities
   });
 });
 
 // In-memory rate limiting map for portal checks (portalId -> timestamp)
 const portalCheckRateLimits = new Map<string, number>();
+const RATE_LIMIT_MS = 15000; // 15 seconds rate limit per portal
 
 apiRouter.post('/portals/:id/check', async (req: Request, res: Response) => {
   const portalId = req.params.id;
@@ -289,11 +388,10 @@ apiRouter.post('/portals/:id/check', async (req: Request, res: Response) => {
     });
   }
 
-  // Rate limit: 1 check per portal per 60 seconds
   const lastCheck = portalCheckRateLimits.get(portalId) || 0;
   const now = Date.now();
-  if (now - lastCheck < 60000) {
-    const remainingSec = Math.ceil((60000 - (now - lastCheck)) / 1000);
+  if (now - lastCheck < RATE_LIMIT_MS) {
+    const remainingSec = Math.ceil((RATE_LIMIT_MS - (now - lastCheck)) / 1000);
     return res.status(429).json({
       error: {
         code: 'RATE_LIMITED',
@@ -306,22 +404,27 @@ apiRouter.post('/portals/:id/check', async (req: Request, res: Response) => {
 
   // Execute SSRF-hardened audit
   const probeResult = await validateAndProbePortalUrl(portal.official_url);
-
-  // Update repository record
   const checkTimestamp = new Date().toISOString();
-  portalRepo.updateAudit(portalId, {
+
+  // Append new monitoring record
+  portalRepo.addMonitoringRecord({
+    portal_id: portalId,
+    check_timestamp: checkTimestamp,
+    monitoring_method: 'automated_probe',
+    tested_scope: probeResult.testedScope,
     status: probeResult.status,
     http_status: probeResult.httpStatus,
     latency_ms: probeResult.latencyMs,
-    last_checked_at: checkTimestamp,
-    disclaimer_notes: probeResult.notes,
-    monitoring_method: 'automated_probe'
+    diagnostic_notes: probeResult.notes
   });
 
-  const updated = portalRepo.findById(portalId);
+  const updated = portalRepo.findById(portalId)!;
 
   res.json({
-    data: updated,
+    data: {
+      ...updated,
+      services_offered: JSON.parse(updated.services_offered)
+    },
     meta: {
       tested_scope: probeResult.testedScope,
       latency_ms: probeResult.latencyMs
@@ -333,7 +436,7 @@ apiRouter.post('/portals/:id/check', async (req: Request, res: Response) => {
 
 apiRouter.get('/dashboard/stats', (req: AuthenticatedRequest, res: Response) => {
   const oppMetrics = opportunityRepo.getMetrics();
-  const portals = portalRepo.list();
+  const portalHealth = portalRepo.getHealthSummary();
 
   let savedCount = 0;
   let completedChecklistSteps = 0;
@@ -352,8 +455,6 @@ apiRouter.get('/dashboard/stats', (req: AuthenticatedRequest, res: Response) => 
     }
   }
 
-  const reachablePortals = portals.filter((p) => p.status === 'reachable').length;
-
   res.json({
     data: {
       totalOpportunities: oppMetrics.total,
@@ -363,9 +464,9 @@ apiRouter.get('/dashboard/stats', (req: AuthenticatedRequest, res: Response) => 
       savedCount,
       completedChecklistSteps,
       portalHealth: {
-        totalPortals: portals.length,
-        reachablePortals,
-        healthRatio: portals.length > 0 ? Math.round((reachablePortals / portals.length) * 100) : 0
+        totalPortals: portalHealth.total,
+        reachablePortals: portalHealth.reachable,
+        healthRatio: portalHealth.ratio
       }
     }
   });

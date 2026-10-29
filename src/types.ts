@@ -2,6 +2,7 @@ export type OpportunityCategory = 'scholarship' | 'examination';
 export type VerificationState = 'verified' | 'provisional' | 'demo';
 export type StepStatus = 'pending' | 'in_progress' | 'completed';
 export type PortalStatus = 'reachable' | 'degraded' | 'issue' | 'unknown' | 'monitoring_unavailable';
+export type PortalRelationshipType = 'application_portal' | 'information_source' | 'registration_portal' | 'notice_portal';
 
 export interface ChecklistStep {
   id: string;
@@ -10,6 +11,42 @@ export interface ChecklistStep {
   is_mandatory: boolean;
   condition_note: string | null;
   official_reference_url: string;
+}
+
+export interface MonitoringRecord {
+  id?: number;
+  portal_id: string;
+  check_timestamp: string;
+  monitoring_method: 'curated_audit' | 'automated_probe';
+  tested_scope: string;
+  status: PortalStatus;
+  http_status: number | null;
+  latency_ms: number | null;
+  diagnostic_notes: string;
+}
+
+export interface Portal {
+  id: string;
+  name: string;
+  official_url: string;
+  verified_hostname: string;
+  description: string;
+  operating_authority: string;
+  category: string;
+  services_offered: string[];
+  verification_state: VerificationState;
+  last_verified_at: string;
+  latest_check?: MonitoringRecord | null;
+}
+
+export interface OpportunityPortalRelation {
+  opportunity_id: string;
+  portal_id: string;
+  relationship_type: PortalRelationshipType;
+  official_reference_url: string | null;
+  relationship_notes: string | null;
+  portal?: Portal;
+  opportunity?: Partial<Opportunity>;
 }
 
 export interface Opportunity {
@@ -34,8 +71,10 @@ export interface Opportunity {
     completed_steps: number;
     percentage: number;
   };
+  linked_portals?: OpportunityPortalRelation[];
 }
 
+// Backward compatibility alias if needed by any older components
 export interface PortalAudit {
   portal_id: string;
   name: string;

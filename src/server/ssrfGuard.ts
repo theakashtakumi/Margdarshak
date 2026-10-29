@@ -1,16 +1,46 @@
 import dns from 'node:dns/promises';
 
-// Strict host allowlist
+// Permitted domains and exact allowed hosts
 export const ALLOWED_PORTAL_HOSTS = new Set([
   'scholarships.gov.in',
+  'www.scholarships.gov.in',
   'upsconline.nic.in',
   'upsc.gov.in',
+  'www.upsc.gov.in',
   'nta.ac.in',
+  'www.nta.ac.in',
   'ugcnet.nta.ac.in',
+  'exams.nta.ac.in',
   'pmrf.in',
+  'www.pmrf.in',
   'swayam.gov.in',
-  'digilocker.gov.in'
+  'www.swayam.gov.in',
+  'digilocker.gov.in',
+  'www.digilocker.gov.in'
 ]);
+
+export function isHostAllowed(hostname: string): boolean {
+  const lower = hostname.toLowerCase();
+  if (ALLOWED_PORTAL_HOSTS.has(lower)) {
+    return true;
+  }
+  // Allow official government second-level domains
+  if (lower.endsWith('.gov.in') || lower.endsWith('.nic.in') || lower.endsWith('.pmrf.in')) {
+    // Prevent malicious prefix injection e.g. evil.gov.in.attacker.com
+    const parts = lower.split('.');
+    if (parts.length >= 3) {
+      const tld = parts[parts.length - 1];
+      const sld = parts[parts.length - 2];
+      if ((sld === 'gov' || sld === 'nic') && tld === 'in') {
+        return true;
+      }
+      if (sld === 'pmrf' && tld === 'in') {
+        return true;
+      }
+    }
+  }
+  return false;
+}
 
 // IP blocking helper
 export function isPrivateOrReservedIP(ip: string): boolean {
@@ -77,13 +107,13 @@ export async function validateAndProbePortalUrl(rawUrl: string, maxRedirects = 2
 
     // Host allowlist check
     const hostname = parsed.hostname.toLowerCase();
-    if (!ALLOWED_PORTAL_HOSTS.has(hostname)) {
+    if (!isHostAllowed(hostname)) {
       return {
         status: 'issue',
         httpStatus: null,
         latencyMs: Date.now() - startTime,
         testedScope: 'host_allowlist_validation',
-        notes: `Access restricted: Host "${hostname}" is not on the government allowlist.`
+        notes: `Access restricted: Host "${hostname}" is not on the approved government allowlist.`
       };
     }
 
@@ -122,7 +152,7 @@ export async function validateAndProbePortalUrl(rawUrl: string, maxRedirects = 2
         signal: controller.signal,
         redirect: 'manual', // handle redirects explicitly
         headers: {
-          'User-Agent': 'MargdarshakCivicPortalAudit/1.0 (+https://margdarshak.gov.in/audit)'
+          'User-Agent': 'MargdarshakCivicPortalAudit/1.0 (+https://scholarships.gov.in)'
         }
       });
       clearTimeout(timeoutId);

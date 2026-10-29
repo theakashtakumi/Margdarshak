@@ -3,6 +3,7 @@ import { Opportunity } from '../types.ts';
 import { OpportunityCard } from './OpportunityCard.tsx';
 import { fetchOpportunities } from '../lib/api.ts';
 import { Search, Filter, RotateCcw, ShieldCheck, AlertCircle } from 'lucide-react';
+import { SortDropdown, SortOption } from './SortDropdown.tsx';
 
 interface OpportunitiesViewProps {
   savedIds: string[];
@@ -25,6 +26,7 @@ export const OpportunitiesView: React.FC<OpportunitiesViewProps> = ({
   const [category, setCategory] = useState<string>(initialCategory);
   const [academicLevel, setAcademicLevel] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [sortBy, setSortBy] = useState<SortOption>('deadline_soonest');
 
   const loadData = async () => {
     setLoading(true);
@@ -34,7 +36,8 @@ export const OpportunitiesView: React.FC<OpportunitiesViewProps> = ({
         search,
         category,
         academic_level: academicLevel,
-        status: statusFilter
+        status: statusFilter,
+        sort: sortBy
       });
       setOpportunities(data);
     } catch (err: any) {
@@ -46,13 +49,13 @@ export const OpportunitiesView: React.FC<OpportunitiesViewProps> = ({
 
   useEffect(() => {
     loadData();
-  }, [category, academicLevel, statusFilter]);
+  }, [category, academicLevel, statusFilter, sortBy]);
 
   // Debounced search
   useEffect(() => {
     const timer = setTimeout(() => {
       loadData();
-    }, 250);
+    }, 200);
     return () => clearTimeout(timer);
   }, [search]);
 
@@ -61,9 +64,10 @@ export const OpportunitiesView: React.FC<OpportunitiesViewProps> = ({
     setCategory('all');
     setAcademicLevel('all');
     setStatusFilter('all');
+    setSortBy('deadline_soonest');
   };
 
-  const hasActiveFilters = search !== '' || category !== 'all' || academicLevel !== 'all' || statusFilter !== 'all';
+  const hasActiveFilters = search !== '' || category !== 'all' || academicLevel !== 'all' || statusFilter !== 'all' || sortBy !== 'deadline_soonest';
 
   return (
     <div className="space-y-6">
@@ -82,21 +86,28 @@ export const OpportunitiesView: React.FC<OpportunitiesViewProps> = ({
       </div>
 
       {/* Search and Filters Strip */}
-      <div className="p-4 bg-white rounded-xl border border-[#E2E8F0] shadow-[0_1px_3px_rgba(26,43,76,0.04)] space-y-4">
-        {/* Search Input */}
-        <div className="relative">
-          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-[#94A3B8]" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by scheme name, issuing ministry, or degree eligibility..."
-            className="w-full pl-10 pr-4 py-2 text-sm bg-white border border-[#CBD5E1] rounded-lg text-[#1F2937] placeholder-[#94A3B8] focus:outline-none focus:border-[#0F9D8A] focus:ring-3 focus:ring-[#0F9D8A]/15 transition-all"
+      <div className="p-4 sm:p-5 bg-white rounded-xl border border-[#E2E8F0] shadow-[0_1px_3px_rgba(26,43,76,0.04)] space-y-4">
+        {/* Search Input & Modular Sort Dropdown */}
+        <div className="flex flex-col sm:flex-row gap-3">
+          <div className="relative flex-1">
+            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-[#94A3B8]" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search by scheme name, issuing ministry, domain (.gov.in), or eligibility..."
+              className="w-full pl-10 pr-4 py-2 text-sm bg-white border border-[#CBD5E1] rounded-lg text-[#1F2937] placeholder-[#94A3B8] focus:outline-none focus:border-[#0F9D8A] focus:ring-3 focus:ring-[#0F9D8A]/15 transition-all"
+            />
+          </div>
+
+          <SortDropdown
+            value={sortBy}
+            onChange={(newSort) => setSortBy(newSort)}
           />
         </div>
 
         {/* Filter Rows (Segmented Buttons - Anti-Slop Discipline) */}
-        <div className="flex flex-wrap items-center gap-4 text-xs font-medium">
+        <div className="flex flex-wrap items-center gap-4 text-xs font-medium pt-1 border-t border-[#F1F5F9]">
           {/* Category Filter */}
           <div className="flex items-center gap-1.5">
             <span className="text-[#64748B]">Category:</span>
@@ -137,7 +148,7 @@ export const OpportunitiesView: React.FC<OpportunitiesViewProps> = ({
           {/* Academic Level Filter */}
           <div className="flex items-center gap-1.5">
             <span className="text-[#64748B]">Target Tier:</span>
-            <div className="inline-flex p-1 bg-[#F1F5F9] rounded-lg">
+            <div className="inline-flex p-1 bg-[#F1F5F9] rounded-lg flex-wrap">
               <button
                 onClick={() => setAcademicLevel('all')}
                 className={`px-2.5 py-1 rounded-md transition-all whitespace-nowrap shrink-0 ${
@@ -147,6 +158,16 @@ export const OpportunitiesView: React.FC<OpportunitiesViewProps> = ({
                 }`}
               >
                 Any
+              </button>
+              <button
+                onClick={() => setAcademicLevel('10+2 / Secondary')}
+                className={`px-2.5 py-1 rounded-md transition-all whitespace-nowrap shrink-0 ${
+                  academicLevel === '10+2 / Secondary'
+                    ? 'bg-white text-[#1A2B4C] font-semibold shadow-xs'
+                    : 'text-[#64748B] hover:text-[#1F2937]'
+                }`}
+              >
+                10+2
               </button>
               <button
                 onClick={() => setAcademicLevel('Undergraduate')}
@@ -178,6 +199,16 @@ export const OpportunitiesView: React.FC<OpportunitiesViewProps> = ({
               >
                 Doctorate
               </button>
+              <button
+                onClick={() => setAcademicLevel('Graduate')}
+                className={`px-2.5 py-1 rounded-md transition-all whitespace-nowrap shrink-0 ${
+                  academicLevel === 'Graduate'
+                    ? 'bg-white text-[#1A2B4C] font-semibold shadow-xs'
+                    : 'text-[#64748B] hover:text-[#1F2937]'
+                }`}
+              >
+                Graduate
+              </button>
             </div>
           </div>
 
@@ -193,7 +224,7 @@ export const OpportunitiesView: React.FC<OpportunitiesViewProps> = ({
                     : 'text-[#64748B] hover:text-[#1F2937]'
                 }`}
               >
-                All States
+                All
               </button>
               <button
                 onClick={() => setStatusFilter('closing_soon')}
@@ -232,7 +263,7 @@ export const OpportunitiesView: React.FC<OpportunitiesViewProps> = ({
           {hasActiveFilters && (
             <button
               onClick={handleResetFilters}
-              className="inline-flex items-center gap-1 text-[#64748B] hover:text-[#1A2B4C] transition-colors ml-auto"
+              className="inline-flex items-center gap-1 text-[#64748B] hover:text-[#1A2B4C] transition-colors ml-auto py-1"
             >
               <RotateCcw className="w-3.5 h-3.5" />
               <span>Reset</span>
@@ -248,7 +279,7 @@ export const OpportunitiesView: React.FC<OpportunitiesViewProps> = ({
         </div>
         <div className="flex items-center gap-1.5 text-[11px]">
           <span className="w-2 h-2 rounded-full bg-[#16A34A]"></span>
-          <span>Verified against .gov.in/.nic.in sources</span>
+          <span>Verified against .gov.in & .nic.in official sources</span>
         </div>
       </div>
 

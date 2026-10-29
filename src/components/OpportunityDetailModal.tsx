@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { Opportunity, StepStatus } from '../types.ts';
 import { calculateDeadlineInfo } from '../lib/dateUtils.ts';
 import { getCalendarDownloadUrl } from '../lib/api.ts';
@@ -14,7 +14,8 @@ import {
   AlertCircle,
   HelpCircle,
   FileText,
-  Lock
+  Lock,
+  Server
 } from 'lucide-react';
 
 interface OpportunityDetailModalProps {
@@ -25,6 +26,7 @@ interface OpportunityDetailModalProps {
   onToggleSave: (id: string) => void;
   checklistProgress: Record<string, StepStatus>;
   onUpdateStep: (opportunityId: string, stepId: string, status: StepStatus) => void;
+  onSelectPortal?: (portalId: string) => void;
 }
 
 export const OpportunityDetailModal: React.FC<OpportunityDetailModalProps> = ({
@@ -34,7 +36,8 @@ export const OpportunityDetailModal: React.FC<OpportunityDetailModalProps> = ({
   isSaved,
   onToggleSave,
   checklistProgress,
-  onUpdateStep
+  onUpdateStep,
+  onSelectPortal
 }) => {
   if (!isOpen || !opportunity) return null;
 
@@ -48,7 +51,7 @@ export const OpportunityDetailModal: React.FC<OpportunityDetailModalProps> = ({
   const progressPercent = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 animate-in fade-in duration-200">
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6 animate-in fade-in duration-200">
       <div 
         className="bg-white rounded-2xl border border-[#E2E8F0] shadow-[0_12px_28px_rgba(26,43,76,0.12)] max-w-3xl w-full max-h-[92vh] flex flex-col overflow-hidden"
         onClick={(e) => e.stopPropagation()}
@@ -162,6 +165,101 @@ export const OpportunityDetailModal: React.FC<OpportunityDetailModalProps> = ({
             </div>
           </div>
 
+          {/* Official Portals & Where to Apply */}
+          {opportunity.linked_portals && opportunity.linked_portals.length > 0 && (
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <h3 className="text-sm font-semibold text-[#1A2B4C] uppercase tracking-wider flex items-center gap-1.5">
+                  <Server className="w-4 h-4 text-[#0F9D8A]" />
+                  <span>Official Portals & Where to Apply ({opportunity.linked_portals.length})</span>
+                </h3>
+              </div>
+              <p className="text-xs text-[#64748B] mb-3">
+                Designated government web portals handling candidate registration, application submission, and official circulars for this opportunity.
+              </p>
+
+              <div className="space-y-2.5">
+                {opportunity.linked_portals.map((rel, idx) => {
+                  const portal = rel.portal;
+                  if (!portal) return null;
+                  const latest = portal.latest_check;
+                  const status = latest?.status || 'unknown';
+
+                  return (
+                    <div
+                      key={idx}
+                      className="p-3.5 rounded-xl border border-[#CBD5E1] bg-[#F8FAFC] flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2 mb-1">
+                          <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-[#243B6B] text-white">
+                            {rel.relationship_type.replace('_', ' ')}
+                          </span>
+                          <span className="text-xs font-semibold text-[#1A2B4C]">
+                            {portal.name}
+                          </span>
+                          <span className="font-mono text-xs text-[#0F9D8A]">
+                            ({portal.verified_hostname})
+                          </span>
+                        </div>
+
+                        {rel.relationship_notes && (
+                          <div className="text-xs text-[#475569] mb-1">
+                            {rel.relationship_notes}
+                          </div>
+                        )}
+
+                        <div className="flex items-center gap-2 text-[11px] text-[#64748B]">
+                          <span>Portal Reachability:</span>
+                          {status === 'reachable' && (
+                            <span className="font-semibold text-[#15803D]">Reachable</span>
+                          )}
+                          {status === 'degraded' && (
+                            <span className="font-semibold text-[#B45309]">Degraded</span>
+                          )}
+                          {status === 'issue' && (
+                            <span className="font-semibold text-[#B91C1C]">Issue Detected</span>
+                          )}
+                          {status === 'unknown' && (
+                            <span className="font-semibold text-[#64748B]">Not Yet Probed</span>
+                          )}
+                          {latest?.latency_ms !== null && latest?.latency_ms !== undefined && (
+                            <span>· {latest.latency_ms} ms</span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        {onSelectPortal && (
+                          <button
+                            type="button"
+                            onClick={() => onSelectPortal(portal.id)}
+                            className="px-2.5 py-1 text-xs font-semibold text-[#243B6B] hover:text-[#1A2B4C] bg-white border border-[#CBD5E1] hover:bg-[#F1F5F9] rounded-lg transition-colors"
+                          >
+                            Portal Diagnostic
+                          </button>
+                        )}
+                        <a
+                          href={rel.official_reference_url || portal.official_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold text-white bg-[#0F9D8A] hover:bg-[#0B8272] rounded-lg transition-colors shadow-xs"
+                        >
+                          <span>Visit Portal</span>
+                          <ExternalLink className="w-3.5 h-3.5" />
+                        </a>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="mt-2 text-[11px] text-[#64748B] italic">
+                Note: Portal status reflects web server availability and does not determine eligibility or guarantee internal transaction completion.
+              </div>
+            </div>
+          )}
+
           {/* Scheme-Specific Document Checklist */}
           <div>
             <div className="flex items-center justify-between mb-3">
@@ -191,7 +289,7 @@ export const OpportunityDetailModal: React.FC<OpportunityDetailModalProps> = ({
 
             {/* Steps List */}
             <div className="space-y-2.5">
-              {opportunity.checklist_schema.map((step, idx) => {
+              {opportunity.checklist_schema.map((step) => {
                 const isCompleted = checklistProgress[step.id] === 'completed';
                 return (
                   <div
