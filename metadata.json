@@ -1,0 +1,6 @@
+{
+  "name": "Margdarshak",
+  "description": "Civic clarity and source-backed student opportunity and government portal monitoring platform.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

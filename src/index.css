@@ -1,0 +1,25 @@
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --color-civic-canvas: #f7f9fc;
+  --color-civic-indigo: #243b6b;
+  --color-civic-navy: #1a2b4c;
+  --color-civic-teal: #0f9d8a;
+  --color-civic-teal-light: #e6f7f5;
+  --color-civic-surface: #ffffff;
+  --color-civic-border: #e2e8f0;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--color-civic-canvas);
+  color: #1f2937;
+}
+
+h1, h2, h3, h4, .font-display {
+  font-family: var(--font-display);
+}
