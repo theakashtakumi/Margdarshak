@@ -177,8 +177,8 @@ export async function fetchPortalById(id: string): Promise<Portal & { related_op
   return result.data;
 }
 
-export async function fetchPortalHistory(id: string): Promise<MonitoringRecord[]> {
-  const result = await apiFetch<{ data: MonitoringRecord[] }>(`/api/portals/${id}/history`);
+export async function fetchPortalHistory(id: string, order: 'ASC' | 'DESC' = 'ASC', limit = 100): Promise<MonitoringRecord[]> {
+  const result = await apiFetch<{ data: MonitoringRecord[] }>(`/api/portals/${id}/history?order=${order}&limit=${limit}`);
   return result.data;
 }
 

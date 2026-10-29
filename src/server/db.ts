@@ -55,8 +55,22 @@ export function initDatabase(db: DatabaseSync) {
     );
   `);
 
-  // 3. Portal Monitoring History (Separate history log)
+  // 3. Portal Monitoring History (Separate history log table: PortalMonitoringHistory)
   db.exec(`
+    CREATE TABLE IF NOT EXISTS PortalMonitoringHistory (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      portal_id TEXT NOT NULL,
+      check_timestamp TEXT NOT NULL,
+      monitoring_method TEXT NOT NULL CHECK(monitoring_method IN ('curated_audit', 'automated_probe')),
+      tested_scope TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('reachable', 'degraded', 'issue', 'unknown', 'monitoring_unavailable')),
+      http_status INTEGER,
+      latency_ms INTEGER,
+      diagnostic_notes TEXT NOT NULL,
+      FOREIGN KEY (portal_id) REFERENCES portals(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_history_portal_time ON PortalMonitoringHistory(portal_id, check_timestamp DESC);
+
     CREATE TABLE IF NOT EXISTS portal_monitoring_records (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       portal_id TEXT NOT NULL,
@@ -810,102 +824,138 @@ function seedOpportunityPortals(db: DatabaseSync) {
 }
 
 function seedInitialMonitoringHistory(db: DatabaseSync) {
-  const countStmt = db.prepare('SELECT COUNT(*) as count FROM portal_monitoring_records');
+  const countStmt = db.prepare('SELECT COUNT(*) as count FROM PortalMonitoringHistory');
   const countRow = countStmt.get() as { count: number };
 
-  if (countRow.count === 0) {
-    const insertStmt = db.prepare(`
+  // Re-seed if unpopulated or if legacy short history (< 40 records) is present
+  if (countRow.count < 40) {
+    db.exec('DELETE FROM PortalMonitoringHistory; DELETE FROM portal_monitoring_records;');
+
+    const insertHistoryStmt = db.prepare(`
+      INSERT INTO PortalMonitoringHistory (
+        portal_id, check_timestamp, monitoring_method, tested_scope,
+        status, http_status, latency_ms, diagnostic_notes
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    const insertRecordsStmt = db.prepare(`
       INSERT INTO portal_monitoring_records (
         portal_id, check_timestamp, monitoring_method, tested_scope,
         status, http_status, latency_ms, diagnostic_notes
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
-    const initialHistory = [
+    // Anchor time: 2026-10-29T08:30:00Z (simulated current time)
+    const baseTimeMs = new Date('2026-10-29T08:30:00Z').getTime();
+    const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+    const portalsHistoryToGenerate = [
       {
         portal_id: 'portal-nsp',
-        check_timestamp: '2026-10-29T08:15:00Z',
-        monitoring_method: 'curated_audit',
-        tested_scope: 'homepage_tls_head_only',
-        status: 'reachable',
-        http_status: 200,
-        latency_ms: 184,
-        diagnostic_notes: 'Root TLS handshake nominal. Transactional services (Aadhaar OTP, student login, file upload) not verified in automated scope.'
-      },
-      {
-        portal_id: 'portal-nsp',
-        check_timestamp: '2026-10-29T04:00:00Z',
-        monitoring_method: 'automated_probe',
-        tested_scope: 'homepage_tls_head_only',
-        status: 'reachable',
-        http_status: 200,
-        latency_ms: 195,
-        diagnostic_notes: 'Scheduled probe successful.'
+        baseLatency: 185,
+        latencyVariance: 25,
+        specialEvents: {
+          22: { status: 'issue' as const, http_status: 503, latency_ms: null, note: 'Scheduled database indexing and MeitY server maintenance window' },
+          14: { status: 'degraded' as const, http_status: 200, latency_ms: 385, note: 'Spike in pre-matric scholarship applicant traffic, elevated TTFB' },
+          13: { status: 'degraded' as const, http_status: 200, latency_ms: 360, note: 'Elevated latency during national verification window' },
+          5: { status: 'degraded' as const, http_status: 200, latency_ms: 340, note: 'Morning institute verification surge' }
+        } as Record<number, { status: 'reachable' | 'degraded' | 'issue'; http_status: number; latency_ms: number | null; note: string }>,
+        defaultNote: 'Root TLS handshake nominal. Transactional services (Aadhaar OTP, student login, file upload) not verified in automated scope.'
       },
       {
         portal_id: 'portal-upsc-online',
-        check_timestamp: '2026-10-29T08:20:00Z',
-        monitoring_method: 'curated_audit',
-        tested_scope: 'homepage_tls_head_only',
-        status: 'reachable',
-        http_status: 200,
-        latency_ms: 220,
-        diagnostic_notes: 'Server responding nominally. One-Time Registration (OTR) server status not verified in automated scope.'
+        baseLatency: 215,
+        latencyVariance: 20,
+        specialEvents: {
+          26: { status: 'degraded' as const, http_status: 200, latency_ms: 345, note: 'Server load elevated during CDS examination admit card release' },
+          18: { status: 'degraded' as const, http_status: 200, latency_ms: 380, note: 'Elevated OTR traffic response time during midday window' },
+          9: { status: 'degraded' as const, http_status: 200, latency_ms: 410, note: 'High OTR registration concurrency during evening peak' },
+          4: { status: 'issue' as const, http_status: 504, latency_ms: null, note: 'Gateway timeout during load balancer reconfiguration' }
+        } as Record<number, { status: 'reachable' | 'degraded' | 'issue'; http_status: number; latency_ms: number | null; note: string }>,
+        defaultNote: 'Server responding nominally. One-Time Registration (OTR) server status not verified in automated scope.'
       },
       {
         portal_id: 'portal-upsc-gov',
-        check_timestamp: '2026-10-29T08:20:00Z',
-        monitoring_method: 'curated_audit',
-        tested_scope: 'homepage_tls_head_only',
-        status: 'reachable',
-        http_status: 200,
-        latency_ms: 178,
-        diagnostic_notes: 'Gazette portal root response nominal.'
+        baseLatency: 175,
+        latencyVariance: 18,
+        specialEvents: {} as Record<number, { status: 'reachable' | 'degraded' | 'issue'; http_status: number; latency_ms: number | null; note: string }>,
+        defaultNote: 'Gazette portal root response nominal.'
       },
       {
         portal_id: 'portal-nta',
-        check_timestamp: '2026-10-29T08:05:00Z',
-        monitoring_method: 'curated_audit',
-        tested_scope: 'homepage_tls_head_only',
-        status: 'reachable',
-        http_status: 200,
-        latency_ms: 310,
-        diagnostic_notes: 'Gateway responsive. Third-party payment gateways and admit card distribution CDN are not audited here.'
+        baseLatency: 285,
+        latencyVariance: 30,
+        specialEvents: {
+          11: { status: 'degraded' as const, http_status: 200, latency_ms: 430, note: 'Heavy download volume on examination notice bulletins' },
+          2: { status: 'degraded' as const, http_status: 200, latency_ms: 390, note: 'High concurrency on candidate bulletin repository' }
+        } as Record<number, { status: 'reachable' | 'degraded' | 'issue'; http_status: number; latency_ms: number | null; note: string }>,
+        defaultNote: 'Gateway responsive. Third-party payment gateways and admit card distribution CDN are not audited here.'
       },
       {
         portal_id: 'portal-ugcnet',
-        check_timestamp: '2026-10-29T08:05:00Z',
-        monitoring_method: 'curated_audit',
-        tested_scope: 'homepage_tls_head_only',
-        status: 'reachable',
-        http_status: 200,
-        latency_ms: 245,
-        diagnostic_notes: 'Application engine responding with valid TLS certificate.'
+        baseLatency: 245,
+        latencyVariance: 22,
+        specialEvents: {
+          8: { status: 'degraded' as const, http_status: 200, latency_ms: 395, note: 'High concurrency on candidate login server' }
+        } as Record<number, { status: 'reachable' | 'degraded' | 'issue'; http_status: number; latency_ms: number | null; note: string }>,
+        defaultNote: 'Application engine responding with valid TLS certificate.'
       },
       {
         portal_id: 'portal-pmrf',
-        check_timestamp: '2026-10-29T07:45:00Z',
-        monitoring_method: 'curated_audit',
-        tested_scope: 'homepage_tls_head_only',
-        status: 'reachable',
-        http_status: 200,
-        latency_ms: 145,
-        diagnostic_notes: 'Homepage content verified. Internal nodal center review portals are restricted intranets.'
+        baseLatency: 145,
+        latencyVariance: 15,
+        specialEvents: {} as Record<number, { status: 'reachable' | 'degraded' | 'issue'; http_status: number; latency_ms: number | null; note: string }>,
+        defaultNote: 'Homepage content verified. Internal nodal center review portals are restricted intranets.'
       }
-      // Note: portal-digilocker intentionally has NO monitoring history records seeded yet (Unknown monitoring state)
     ];
 
-    for (const h of initialHistory) {
-      insertStmt.run(
-        h.portal_id,
-        h.check_timestamp,
-        h.monitoring_method,
-        h.tested_scope,
-        h.status,
-        h.http_status,
-        h.latency_ms,
-        h.diagnostic_notes
-      );
+    // Generate 31 points (Day 30 down to Day 0) for each configured portal
+    for (const config of portalsHistoryToGenerate) {
+      for (let dayAgo = 30; dayAgo >= 0; dayAgo--) {
+        const timestampMs = baseTimeMs - dayAgo * MS_PER_DAY;
+        const check_timestamp = new Date(timestampMs).toISOString();
+        const special = config.specialEvents[dayAgo];
+
+        let status: 'reachable' | 'degraded' | 'issue' = 'reachable';
+        let http_status = 200;
+        let latency_ms: number | null = null;
+        let diagnostic_notes = config.defaultNote;
+        let monitoring_method: 'automated_probe' | 'curated_audit' = dayAgo === 0 ? 'curated_audit' : 'automated_probe';
+
+        if (special) {
+          status = special.status;
+          http_status = special.http_status;
+          latency_ms = special.latency_ms;
+          diagnostic_notes = special.note;
+        } else {
+          // Synthetic deterministic variance around baseline
+          const sineMod = Math.sin(dayAgo * 1.3) * config.latencyVariance;
+          latency_ms = Math.round(config.baseLatency + sineMod);
+          status = 'reachable';
+        }
+
+        insertHistoryStmt.run(
+          config.portal_id,
+          check_timestamp,
+          monitoring_method,
+          'homepage_tls_head_only',
+          status,
+          http_status,
+          latency_ms,
+          diagnostic_notes
+        );
+
+        insertRecordsStmt.run(
+          config.portal_id,
+          check_timestamp,
+          monitoring_method,
+          'homepage_tls_head_only',
+          status,
+          http_status,
+          latency_ms,
+          diagnostic_notes
+        );
+      }
     }
   }
 }

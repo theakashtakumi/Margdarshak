@@ -348,9 +348,16 @@ apiRouter.get('/portals/:id/history', (req: Request, res: Response) => {
     });
   }
 
-  const history = portalRepo.getMonitoringHistory(req.params.id, 25);
+  const order = req.query.order === 'DESC' || req.query.order === 'desc' ? 'DESC' : 'ASC';
+  const limit = req.query.limit ? Math.min(300, Math.max(1, parseInt(req.query.limit as string, 10))) : 100;
+  const history = portalRepo.getMonitoringHistory(req.params.id, limit, order);
   res.json({
-    data: history
+    data: history,
+    meta: {
+      portal_id: portal.id,
+      total: history.length,
+      order
+    }
   });
 });
 

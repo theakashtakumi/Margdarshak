@@ -143,7 +143,12 @@ describe('Independent Portals & Opportunity-Portal Relationships', () => {
     assert.ok(ids.includes('opp-aicte-pragati-2026'));
   });
 
-  test('records and retrieves monitoring history for a portal', () => {
+  test('records and retrieves monitoring history for a portal from PortalMonitoringHistory', () => {
+    // Explicit query on the new PortalMonitoringHistory table
+    const dbCheckStmt = testDb.prepare('SELECT COUNT(*) as count FROM PortalMonitoringHistory WHERE portal_id = ?');
+    const row = dbCheckStmt.get('portal-nsp') as { count: number };
+    assert.ok(row.count >= 1, 'PortalMonitoringHistory table must exist and contain seeded records for portal-nsp');
+
     const historyBefore = portalRepo.getMonitoringHistory('portal-nsp');
     assert.ok(historyBefore.length >= 1);
 
@@ -159,7 +164,7 @@ describe('Independent Portals & Opportunity-Portal Relationships', () => {
     });
     assert.ok(insertedId > 0);
 
-    const historyAfter = portalRepo.getMonitoringHistory('portal-nsp');
+    const historyAfter = portalRepo.getMonitoringHistory('portal-nsp', 50, 'DESC');
     assert.equal(historyAfter.length, historyBefore.length + 1);
     assert.equal(historyAfter[0].latency_ms, 125);
   });

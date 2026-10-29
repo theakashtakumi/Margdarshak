@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Portal, MonitoringRecord, Opportunity } from '../types.ts';
 import { fetchPortalById, fetchPortalHistory, checkPortalHealth } from '../lib/api.ts';
+import { PortalTimeSeriesChart } from './PortalTimeSeriesChart.tsx';
 import {
   X,
   ExternalLink,
@@ -85,7 +86,7 @@ export const PortalDetailModal: React.FC<PortalDetailModalProps> = ({
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-5">
       <div
-        className="relative w-full max-w-3xl bg-white rounded-2xl shadow-2xl border border-[#CBD5E1] overflow-hidden my-6 max-h-[92vh] flex flex-col animate-in fade-in zoom-in-95 duration-200"
+        className="portal-detail-modal relative w-full max-w-3xl bg-white rounded-2xl shadow-2xl border border-[#CBD5E1] overflow-hidden my-6 max-h-[92vh] flex flex-col animate-in fade-in zoom-in-95 duration-200"
         role="dialog"
         aria-modal="true"
       >
@@ -265,6 +266,9 @@ export const PortalDetailModal: React.FC<PortalDetailModalProps> = ({
                 )}
               </div>
 
+              {/* Time-Series Trajectory Chart */}
+              <PortalTimeSeriesChart history={history} />
+
               {/* Honest Civic Notice */}
               <div className="p-3.5 rounded-xl border border-[#CBD5E1] bg-[#F8FAFC] flex items-start gap-3 text-xs text-[#475569]">
                 <ShieldAlert className="w-4 h-4 text-[#243B6B] shrink-0 mt-0.5" />
@@ -347,7 +351,9 @@ export const PortalDetailModal: React.FC<PortalDetailModalProps> = ({
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-[#F1F5F9]">
-                          {history.map((record, idx) => (
+                          {[...history]
+                            .sort((a, b) => new Date(b.check_timestamp).getTime() - new Date(a.check_timestamp).getTime())
+                            .map((record, idx) => (
                             <tr key={record.id || idx} className="hover:bg-[#F8FAFC]">
                               <td className="py-2 px-3 text-[#334155] whitespace-nowrap">
                                 {new Date(record.check_timestamp).toLocaleString('en-IN', {

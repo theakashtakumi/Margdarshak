@@ -178,7 +178,7 @@ export class OpportunityRepository {
     // Fetch latest monitoring record for each portal
     return rows.map((r) => {
       const latestStmt = this.database.prepare(`
-        SELECT * FROM portal_monitoring_records
+        SELECT * FROM PortalMonitoringHistory
         WHERE portal_id = ?
         ORDER BY check_timestamp DESC, id DESC
         LIMIT 1
@@ -261,10 +261,10 @@ export class PortalRepository {
     const stmt = this.database.prepare(query);
     const portals = stmt.all(...params) as unknown as PortalRecord[];
 
-    // Attach latest monitoring record
+    // Attach latest monitoring record from PortalMonitoringHistory
     return portals.map((p) => {
       const latestStmt = this.database.prepare(`
-        SELECT * FROM portal_monitoring_records
+        SELECT * FROM PortalMonitoringHistory
         WHERE portal_id = ?
         ORDER BY check_timestamp DESC, id DESC
         LIMIT 1
@@ -283,7 +283,7 @@ export class PortalRepository {
     if (!portal) return null;
 
     const latestStmt = this.database.prepare(`
-      SELECT * FROM portal_monitoring_records
+      SELECT * FROM PortalMonitoringHistory
       WHERE portal_id = ?
       ORDER BY check_timestamp DESC, id DESC
       LIMIT 1
@@ -296,24 +296,25 @@ export class PortalRepository {
     };
   }
 
-  getMonitoringHistory(portalId: string, limit = 20): MonitoringRecord[] {
+  getMonitoringHistory(portalId: string, limit = 50, order: 'ASC' | 'DESC' = 'ASC'): MonitoringRecord[] {
+    const orderClause = order === 'DESC' ? 'DESC' : 'ASC';
     const stmt = this.database.prepare(`
-      SELECT * FROM portal_monitoring_records
+      SELECT * FROM PortalMonitoringHistory
       WHERE portal_id = ?
-      ORDER BY check_timestamp DESC, id DESC
+      ORDER BY check_timestamp ${orderClause}, id ${orderClause}
       LIMIT ?
     `);
     return stmt.all(portalId, limit) as unknown as MonitoringRecord[];
   }
 
   addMonitoringRecord(record: MonitoringRecord): number {
-    const stmt = this.database.prepare(`
-      INSERT INTO portal_monitoring_records (
+    const historyStmt = this.database.prepare(`
+      INSERT INTO PortalMonitoringHistory (
         portal_id, check_timestamp, monitoring_method, tested_scope,
         status, http_status, latency_ms, diagnostic_notes
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
-    const result = stmt.run(
+    const result = historyStmt.run(
       record.portal_id,
       record.check_timestamp,
       record.monitoring_method,
@@ -323,6 +324,29 @@ export class PortalRepository {
       record.latency_ms,
       record.diagnostic_notes
     );
+
+    // Also mirror to legacy records table if present
+    try {
+      const recordsStmt = this.database.prepare(`
+        INSERT INTO portal_monitoring_records (
+          portal_id, check_timestamp, monitoring_method, tested_scope,
+          status, http_status, latency_ms, diagnostic_notes
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      recordsStmt.run(
+        record.portal_id,
+        record.check_timestamp,
+        record.monitoring_method,
+        record.tested_scope,
+        record.status,
+        record.http_status,
+        record.latency_ms,
+        record.diagnostic_notes
+      );
+    } catch {
+      // ignore
+    }
+
     return Number(result.lastInsertRowid);
   }
 
@@ -374,7 +398,7 @@ export class PortalRepository {
     const reachableStmt = this.database.prepare(`
       SELECT COUNT(*) as reachable FROM portals p
       WHERE (
-        SELECT status FROM portal_monitoring_records
+        SELECT status FROM PortalMonitoringHistory
         WHERE portal_id = p.id
         ORDER BY check_timestamp DESC, id DESC
         LIMIT 1
